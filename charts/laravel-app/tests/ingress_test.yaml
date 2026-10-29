@@ -1,0 +1,31 @@
+suite: ingress
+templates:
+  - templates/ingress.yaml
+tests:
+  - it: is disabled by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: requires a host when enabled
+    set:
+      ingress.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: ingress.host is required when the ingress is enabled
+
+  - it: requests a certificate from the configured cluster issuer
+    set:
+      ingress.enabled: true
+      ingress.host: app.example.test
+      ingress.tls.clusterIssuer: lab-ca
+    asserts:
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: lab-ca
+      - equal:
+          path: spec.tls[0].secretName
+          value: RELEASE-NAME-laravel-app-tls
+      - equal:
+          path: spec.rules[0].host
+          value: app.example.test

@@ -1,0 +1,4 @@
+/.tools/
+/.kube/
+/tests/alerts/rendered-rules.yaml
+/diagnostics/

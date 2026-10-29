@@ -1,0 +1,160 @@
+# promtool unit tests for the chart's recording and alerting rules, rendered
+# with the default values (release laravel-app, namespace app).
+# Run with: make test-alerts
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # Both replicas expose the same Redis-backed counters. The recording rule must
+  # report the real request rate (10/s), not twice that.
+  - name: request rate is not multiplied by the replica count
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{namespace="app", job="laravel-app", service="laravel-app", endpoint="http", container="app", pod="a", instance="10.0.0.1:8080", method="GET", route="/", status="200"}'
+        values: '0+600x15'
+      - series: 'http_requests_total{namespace="app", job="laravel-app", service="laravel-app", endpoint="http", container="app", pod="b", instance="10.0.0.2:8080", method="GET", route="/", status="200"}'
+        values: '0+600x15'
+    promql_expr_test:
+      - expr: app:http_requests:rate5m
+        eval_time: 10m
+        exp_samples:
+          - labels: 'app:http_requests:rate5m{namespace="app", job="laravel-app", service="laravel-app", method="GET", route="/", status="200"}'
+            value: 10
+
+  - name: 10% server errors on application routes fire LaravelAppHighErrorRate
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{namespace="app", job="laravel-app", pod="a", instance="a", method="GET", route="/", status="200"}'
+        values: '0+540x15'
+      - series: 'http_requests_total{namespace="app", job="laravel-app", pod="b", instance="b", method="GET", route="/", status="200"}'
+        values: '0+540x15'
+      - series: 'http_requests_total{namespace="app", job="laravel-app", pod="a", instance="a", method="GET", route="/", status="500"}'
+        values: '0+60x15'
+      - series: 'http_requests_total{namespace="app", job="laravel-app", pod="b", instance="b", method="GET", route="/", status="500"}'
+        values: '0+60x15'
+    alert_rule_test:
+      - alertname: LaravelAppHighErrorRate
+        eval_time: 3m
+        exp_alerts: []
+      - alertname: LaravelAppHighErrorRate
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: laravel-app returns too many 5xx responses
+              description: 10% of requests failed over the last 5 minutes (threshold 0.05).
+
+  # Kubelet probes hit /ready every few seconds; during a database outage they
+  # all return 503. That must not count as user-facing errors.
+  - name: failing readiness probes do not count as user-facing errors
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{namespace="app", job="laravel-app", pod="a", instance="a", method="GET", route="/", status="200"}'
+        values: '0+60x15'
+      - series: 'http_requests_total{namespace="app", job="laravel-app", pod="a", instance="a", method="GET", route="ready", status="503"}'
+        values: '0+120x15'
+    alert_rule_test:
+      - alertname: LaravelAppHighErrorRate
+        eval_time: 12m
+        exp_alerts: []
+    promql_expr_test:
+      - expr: app:http_errors:ratio5m
+        eval_time: 12m
+        exp_samples:
+          - labels: 'app:http_errors:ratio5m'
+            value: 0
+
+  - name: LaravelAppDown fires when no pod can be scraped
+    interval: 15s
+    input_series:
+      - series: 'up{namespace="app", job="laravel-app", pod="a"}'
+        values: '1x4 0x20'
+      - series: 'up{namespace="app", job="laravel-app", pod="b"}'
+        values: '1x4 0x20'
+    alert_rule_test:
+      - alertname: LaravelAppDown
+        eval_time: 1m
+        exp_alerts: []
+      - alertname: LaravelAppDown
+        eval_time: 3m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: app
+              job: laravel-app
+            exp_annotations:
+              summary: No laravel-app pod can be scraped
+              description: Prometheus has not reached any laravel-app pod in app for 1m. Check the pods and recent deployments.
+
+  - name: LaravelAppDown fires when the targets disappear entirely
+    interval: 15s
+    input_series:
+      - series: 'up{namespace="app", job="laravel-app", pod="a"}'
+        values: '1x4'
+    alert_rule_test:
+      - alertname: LaravelAppDown
+        eval_time: 8m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: app
+              job: laravel-app
+            exp_annotations:
+              summary: No laravel-app pod can be scraped
+              description: Prometheus has not reached any laravel-app pod in app for 1m. Check the pods and recent deployments.
+
+  - name: one healthy pod keeps LaravelAppDown quiet
+    interval: 15s
+    input_series:
+      - series: 'up{namespace="app", job="laravel-app", pod="a"}'
+        values: '1x20'
+      - series: 'up{namespace="app", job="laravel-app", pod="b"}'
+        values: '0x20'
+    alert_rule_test:
+      - alertname: LaravelAppDown
+        eval_time: 4m
+        exp_alerts: []
+
+  - name: database outage path, no ready replicas
+    interval: 15s
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="app", deployment="laravel-app"}'
+        values: '2x4 0x20'
+      - series: 'kube_deployment_spec_replicas{namespace="app", deployment="laravel-app"}'
+        values: '2x24'
+    alert_rule_test:
+      - alertname: LaravelAppNoReadyReplicas
+        eval_time: 3m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: app
+              deployment: laravel-app
+            exp_annotations:
+              summary: laravel-app has no ready replicas
+              description: Every pod fails its readiness check, so the service receives no traffic. /ready reports which dependency (database or cache) is failing.
+
+  - name: a stuck rollout fires LaravelAppDegraded only after 5 minutes
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="app", deployment="laravel-app"}'
+        values: '2 1x10'
+      - series: 'kube_deployment_spec_replicas{namespace="app", deployment="laravel-app"}'
+        values: '2x10'
+    alert_rule_test:
+      - alertname: LaravelAppDegraded
+        eval_time: 4m
+        exp_alerts: []
+      - alertname: LaravelAppDegraded
+        eval_time: 8m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: app
+              deployment: laravel-app
+            exp_annotations:
+              summary: laravel-app runs with fewer ready replicas than desired
+              description: 1 replicas are available. A stuck rollout or a failing node is the usual cause.

@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  static:
+    name: Static checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned tools
+        run: scripts/install-tools.sh
+
+      - name: Helm lint, unit tests, kubeconform, shellcheck
+        run: scripts/lint.sh
+
+      - name: Alert rule unit tests (promtool)
+        run: scripts/test-alerts.sh
+
+      - name: Lint workflows (actionlint)
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:1.7.12 -color
+
+  e2e:
+    name: Cluster, deploy, rollout and failure drills
+    needs: static
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # Shorter alert delays so the drills see alerts fire within minutes.
+      LAB_EXTRA_VALUES: environments/ci/values.yaml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned tools
+        run: scripts/install-tools.sh
+
+      - name: Create k3d cluster (1 server, 2 agents)
+        run: scripts/cluster-up.sh
+
+      - name: Install kube-prometheus-stack, cert-manager and lab CA
+        run: scripts/install-platform.sh
+
+      - name: Deploy datastores and the application
+        run: scripts/deploy.sh
+
+      - name: Smoke test
+        run: scripts/smoke-test.sh
+
+      - name: Rolling update and rollback under traffic
+        run: scripts/rollout.sh
+
+      - name: "Drill: pod loss"
+        run: scripts/drills/pod-loss.sh
+
+      - name: "Drill: PostgreSQL outage"
+        run: scripts/drills/dependency-outage.sh postgres
+
+      - name: "Drill: Redis outage"
+        run: scripts/drills/dependency-outage.sh redis
+
+      - name: "Drill: bad release and rollback"
+        run: scripts/drills/bad-release.sh
+
+      - name: Collect diagnostics
+        if: failure()
+        run: scripts/diagnostics.sh
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: diagnostics
+          path: diagnostics/
+          retention-days: 7
+
+      - name: Delete cluster
+        if: always()
+        run: scripts/cluster-down.sh

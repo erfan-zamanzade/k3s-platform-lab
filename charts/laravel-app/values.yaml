@@ -1,0 +1,182 @@
+# Default values are production-shaped: no ingress host, no lab shortcuts.
+# The lab overrides live in environments/lab/values.yaml.
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/erfan-zamanzade/laravel-cicd-pipeline
+  # Defaults to the chart's appVersion.
+  tag: ""
+  # sha256:... digest. When set it wins over the tag, so the exact scanned and
+  # attested image is deployed.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  # The service never talks to the Kubernetes API.
+  automountToken: false
+
+podAnnotations: {}
+podLabels: {}
+
+# Non-secret environment for the application and the migration job.
+env:
+  APP_NAME: laravel-cicd-pipeline
+  LOG_LEVEL: info
+  DB_CONNECTION: pgsql
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_DATABASE: app
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  CACHE_STORE: redis
+  METRICS_STORE: redis
+
+# Database credentials come from an existing Secret; the chart never renders
+# a password.
+database:
+  existingSecret: app-db
+  usernameKey: username
+  passwordKey: password
+
+# Schema migrations run once per install or upgrade as a Helm hook, before any
+# new application pod starts, so replicas never race to migrate.
+migrations:
+  enabled: true
+  backoffLimit: 1
+  activeDeadlineSeconds: 300
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 192Mi
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  annotations: {}
+  tls:
+    enabled: true
+    # cert-manager ClusterIssuer that signs the certificate. Empty means the
+    # secret below must already exist.
+    clusterIssuer: ""
+    secretName: ""
+
+containerPort: 8080
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 96Mi
+  limits:
+    memory: 256Mi
+
+# Never drop below the desired replica count during a rollout: a new pod
+# must be Ready before an old one is removed.
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+revisionHistoryLimit: 5
+minReadySeconds: 5
+
+# Liveness only checks that PHP answers, so a database outage takes pods out
+# of the load balancer (readiness) without restarting them.
+probes:
+  startup:
+    httpGet:
+      path: /health
+      port: http
+    periodSeconds: 2
+    failureThreshold: 30
+  liveness:
+    httpGet:
+      path: /health
+      port: http
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    httpGet:
+      path: /ready
+      port: http
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 2
+
+# Keep serving while the endpoint removal propagates to the ingress
+# controller, then let PHP-FPM finish in-flight requests.
+preStopSleepSeconds: 5
+terminationGracePeriodSeconds: 30
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 82
+  runAsGroup: 82
+  fsGroup: 82
+  seccompProfile:
+    type: RuntimeDefault
+
+# readOnlyRootFilesystem is not set: the base image's init system (s6-overlay)
+# must own /run and renders the Nginx config at start-up. See the README.
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Spread replicas across nodes when possible.
+topologySpread:
+  enabled: true
+  maxSkew: 1
+  whenUnsatisfiable: ScheduleAnyway
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+networkPolicy:
+  enabled: true
+  # Namespaces allowed to reach the HTTP port (ingress controller, Prometheus).
+  allowedNamespaces:
+    - kube-system
+    - monitoring
+
+metrics:
+  serviceMonitor:
+    enabled: true
+    interval: 15s
+    scrapeTimeout: 10s
+    labels: {}
+  prometheusRule:
+    enabled: true
+    labels: {}
+    # 5xx ratio (excluding probe and metrics routes) that pages.
+    errorRatioThreshold: 0.05
+    for:
+      down: 1m
+      noReadyReplicas: 1m
+      degraded: 5m
+      errorRatio: 5m
+  dashboard:
+    enabled: true
+    # Grafana's sidecar picks up ConfigMaps with this label.
+    labels:
+      grafana_dashboard: "1"

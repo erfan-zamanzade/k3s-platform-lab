@@ -1,0 +1,10 @@
+crds:
+  enabled: true
+prometheus:
+  enabled: true
+  servicemonitor:
+    enabled: true
+resources:
+  requests:
+    cpu: 10m
+    memory: 48Mi

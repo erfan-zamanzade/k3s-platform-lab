@@ -1,0 +1,9 @@
+{{ include "laravel-app.fullname" . }} {{ include "laravel-app.version" . }} is deployed to {{ .Release.Namespace }}.
+
+{{- if .Values.ingress.enabled }}
+URL: https://{{ .Values.ingress.host }}/
+{{- end }}
+
+Check it:
+  kubectl -n {{ .Release.Namespace }} rollout status deployment/{{ include "laravel-app.fullname" . }}
+  helm -n {{ .Release.Namespace }} test {{ .Release.Name }}

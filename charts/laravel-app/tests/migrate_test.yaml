@@ -1,0 +1,19 @@
+suite: migration job
+templates:
+  - templates/migrate-job.yaml
+tests:
+  - it: runs before install and upgrade
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: ["php", "/var/www/html/artisan", "migrate", "--force", "--no-interaction"]
+
+  - it: can be turned off
+    set:
+      migrations.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

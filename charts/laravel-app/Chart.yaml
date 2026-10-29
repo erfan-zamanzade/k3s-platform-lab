@@ -1,0 +1,14 @@
+apiVersion: v2
+name: laravel-app
+description: Deploys the laravel-cicd-pipeline service with probes, TLS ingress, safe rolling updates, network policy and Prometheus monitoring.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+kubeVersion: ">=1.33.0-0"
+home: https://github.com/erfan-zamanzade/k3s-platform-lab
+sources:
+  - https://github.com/erfan-zamanzade/k3s-platform-lab
+  - https://github.com/erfan-zamanzade/laravel-cicd-pipeline
+maintainers:
+  - name: Erfan Zamanzade
+    url: https://github.com/erfan-zamanzade

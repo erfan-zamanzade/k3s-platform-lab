@@ -1,0 +1,89 @@
+suite: deployment
+templates:
+  - templates/deployment.yaml
+tests:
+  - it: uses the chart appVersion as the default image tag
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/erfan-zamanzade/laravel-cicd-pipeline:1.0.0
+
+  - it: prefers a pinned digest over the tag
+    set:
+      image.tag: sha-abc1234
+      image.digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/erfan-zamanzade/laravel-cicd-pipeline@sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+  - it: never removes a ready pod before its replacement is ready
+    asserts:
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 1
+
+  - it: separates liveness (/health) from readiness (/ready)
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /health
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /ready
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /health
+
+  - it: runs unprivileged
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: reads the database password from the existing Secret
+    set:
+      database.existingSecret: prod-db
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: prod-db
+                key: password
+
+  - it: refuses to render without a database Secret
+    set:
+      database.existingSecret: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: database.existingSecret is required
+
+  - it: drains connections before stopping
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 5
+
+  - it: adds extra pod labels (used for network policy access)
+    set:
+      podLabels:
+        db-client: "true"
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels.db-client
+          value: "true"

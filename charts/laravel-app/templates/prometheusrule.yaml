@@ -1,0 +1,74 @@
+{{- if .Values.metrics.prometheusRule.enabled }}
+{{- $job := include "laravel-app.fullname" . }}
+{{- $ns := .Release.Namespace }}
+{{- $rule := .Values.metrics.prometheusRule }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ $job }}
+  labels:
+    {{- include "laravel-app.labels" . | nindent 4 }}
+    {{- with $rule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: {{ $job }}.rules
+      rules:
+        # Request counters live in Redis, so every replica exposes the same
+        # totals. Take the max across pods instead of summing, or the rate
+        # would be multiplied by the replica count.
+        - record: app:http_requests:rate5m
+          expr: |
+            max without (instance, pod, endpoint, container) (
+              rate(http_requests_total{namespace="{{ $ns }}", job="{{ $job }}"}[5m])
+            )
+        # 0 rather than no data when there is traffic but no errors.
+        - record: app:http_errors:ratio5m
+          expr: |
+            (sum(app:http_requests:rate5m{route!~"health|ready|metrics", status=~"5.."}) or vector(0))
+              /
+            sum(app:http_requests:rate5m{route!~"health|ready|metrics"})
+    - name: {{ $job }}.alerts
+      rules:
+        - alert: LaravelAppDown
+          # absent() covers "no targets at all"; the max() keeps the namespace
+          # and job labels that routing and the dashboard rely on.
+          expr: |
+            max by (namespace, job) (up{namespace="{{ $ns }}", job="{{ $job }}"}) == 0
+              or
+            absent(up{namespace="{{ $ns }}", job="{{ $job }}"})
+          for: {{ $rule.for.down }}
+          labels:
+            severity: critical
+          annotations:
+            summary: No {{ $job }} pod can be scraped
+            description: Prometheus has not reached any {{ $job }} pod in {{ $ns }} for {{ $rule.for.down }}. Check the pods and recent deployments.
+        - alert: LaravelAppNoReadyReplicas
+          expr: kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="{{ $job }}"} == 0
+          for: {{ $rule.for.noReadyReplicas }}
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $job }} has no ready replicas"
+            description: Every pod fails its readiness check, so the service receives no traffic. /ready reports which dependency (database or cache) is failing.
+        - alert: LaravelAppDegraded
+          expr: |
+            kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="{{ $job }}"}
+              <
+            kube_deployment_spec_replicas{namespace="{{ $ns }}", deployment="{{ $job }}"}
+          for: {{ $rule.for.degraded }}
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $job }} runs with fewer ready replicas than desired"
+            description: "{{`{{ $value }}`}} replicas are available. A stuck rollout or a failing node is the usual cause."
+        - alert: LaravelAppHighErrorRate
+          expr: app:http_errors:ratio5m > {{ $rule.errorRatioThreshold }}
+          for: {{ $rule.for.errorRatio }}
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $job }} returns too many 5xx responses"
+            description: "{{`{{ $value | humanizePercentage }}`}} of requests failed over the last 5 minutes (threshold {{ $rule.errorRatioThreshold }})."
+{{- end }}

@@ -1,0 +1,13 @@
+# Values for the local k3d lab.
+podLabels:
+  db-client: "true"
+
+ingress:
+  enabled: true
+  className: traefik
+  host: app.lab.test
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  tls:
+    enabled: true
+    clusterIssuer: lab-ca

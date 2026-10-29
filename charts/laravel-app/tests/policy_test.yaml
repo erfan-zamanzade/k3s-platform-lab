@@ -1,0 +1,32 @@
+suite: availability and network policy
+templates:
+  - templates/pdb.yaml
+  - templates/networkpolicy.yaml
+tests:
+  - it: keeps one pod during voluntary disruptions
+    template: templates/pdb.yaml
+    asserts:
+      - equal:
+          path: spec.minAvailable
+          value: 1
+
+  - it: skips the PodDisruptionBudget for a single replica (it would block node drains)
+    template: templates/pdb.yaml
+    set:
+      replicaCount: 1
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: admits traffic only from the allowed namespaces and the test pod
+    template: templates/networkpolicy.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.ingress[0].from
+          count: 3
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: kube-system
+      - equal:
+          path: spec.ingress[0].from[2].podSelector.matchLabels["app.kubernetes.io/component"]
+          value: test

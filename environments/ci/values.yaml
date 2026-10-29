@@ -1,0 +1,9 @@
+# Applied on top of environments/lab/values.yaml in CI: shorter alert delays so
+# the failure drills can observe alerts firing within a few minutes.
+metrics:
+  prometheusRule:
+    for:
+      down: 30s
+      noReadyReplicas: 30s
+      degraded: 1m
+      errorRatio: 1m
