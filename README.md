@@ -166,7 +166,7 @@ The CI run uses shorter alert `for:` durations (`environments/ci/values.yaml`) s
 
 ## Cost and resources
 
-$0. Everything runs locally or on GitHub-hosted runners for public repositories. The full lab uses about 3 GB of memory (measured with `docker stats`); a complete CI run takes about 15 minutes.
+$0. Everything runs locally or on GitHub-hosted runners for public repositories. The full lab uses about 3 GB of memory (measured with `docker stats`); a complete CI run takes about 10 minutes.
 
 ## Troubleshooting
 
@@ -191,6 +191,7 @@ All results come from real runs.
 
 | Check | Where | Result |
 |-------|-------|--------|
+| Full pipeline in GitHub Actions (amd64) | [Run 40908386118](https://github.com/erfan-zamanzade/k3s-platform-lab/actions/runs/40908386118) | Static checks and end-to-end job passed (end-to-end 9 min 43 s): rollout 102 requests and rollback 80 requests with 0 failed, pod loss 171 requests 0 failed, PostgreSQL and Redis outages alerted after 55 s and 61 s with no restarts, bad release 432 requests 0 failed |
 | Cluster and platform from zero (`cluster-up` + `install-platform`) | arm64 Linux server, Docker 29.3, 2026-10-29 | Passed in 2 min 16 s |
 | Deploy, smoke test, rollout and all four drills | same machine, fresh cluster | Passed in 8 min 22 s |
 | Rolling update 1.0.0 → 1.0.1 under traffic | same run | 103 requests, 0 failed |
